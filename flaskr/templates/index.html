@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>High FPS Grid Visualization</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/5.3.3/pixi.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> <!-- Chart.js Library -->
+    <script>
+        const imagePathShip = "{{ url_for('static', filename='images/transportation.png') }}"; // Flask generates the correct URL
+        const imagePathTrain = "{{ url_for('static', filename='images/train-cargo.png') }}"; // Flask generates the correct URL
+        const imagePathPlane = "{{ url_for('static', filename='images/delivery.png') }}"; // Flask generates the correct URL
+        const imagePathTruck = "{{ url_for('static', filename='images/freight.png') }}"; // Flask generates the correct URL
+    </script>
+    <style>
+        body {
+            background-color: #121212;
+            font-family: Arial, sans-serif;
+            color: white;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .container {
+            position: relative;
+            width: 95%;
+            max-width: 1400px;
+            height: 90vh; /* Make the canvas take up a large portion of the vertical space */
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Top Metrics Section */
+        .top-metrics {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .stat-box {
+            background-color: #2b2b2b;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            flex: 1;
+            margin: 0 10px;
+        }
+
+        .stat-box h3 {
+            margin: 0;
+            font-size: 1.2em;
+            color: #bbbbbb;
+        }
+
+        .stat-box h2 {
+            margin: 10px 0 0;
+            font-size: 2em;
+            font-weight: bold;
+        }
+
+        .stat-box:first-child {
+            margin-left: 0;
+        }
+
+        .stat-box:last-child {
+            margin-right: 0;
+        }
+
+        /* Canvas Section */
+        .canvas-container {
+            flex-grow: 1;
+            background-color: #000;
+            border-radius: 15px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            border-radius: 15px;
+        }
+
+        /* Bottom Graphs Section */
+        .bottom-graphs {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+        }
+
+        .graph-box {
+            background-color: #2b2b2b;
+            width: 32%;
+            height: 180px;
+            border-radius: 15px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #bbbbbb;
+            font-size: 1.2em;
+            text-align: center;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Top Metrics Section -->
+        <div class="top-metrics">
+            <div class="stat-box" id="crashCount">
+                <h3>Number of Crashes</h3>
+                <h2>0</h2>
+            </div>
+            <div class="stat-box">
+                <h3>Average Speed</h3>
+                <h2 id="avgSpeed">0m/s</h2> <!-- Dynamic speed placeholder -->
+            </div>
+            <div class="stat-box">
+                <h3>Number of AGVs</h3>
+                <h2>10</h2>
+            </div>
+            <div class="stat-box">
+                <h3>Time Passed</h3>
+                <h2 id="timePassed">00:00</h2> <!-- Time display -->
+            </div>
+        </div>
+
+        <!-- Canvas Section -->
+        <div class="canvas-container">
+            <canvas id="myCanvas"></canvas>
+        </div>
+
+        <!-- Bottom Graphs Section -->
+        <div class="bottom-graphs">
+            <div class="graph-box">
+                <canvas id="crashGraph"></canvas> <!-- Graph for crashes -->
+            </div>
+            <div class="graph-box">
+                <canvas id="containerGraph"></canvas>
+            </div>
+            <div class="graph-box">
+                <canvas id="speedGraph"></canvas> <!-- Graph for speed -->
+            </div>
+        </div>
+    </div>
+
+    <script src="../static/draw.js"></script>
+    <script>
+        // Timer Functionality
+        let startTime = Date.now(); // Time when the page is loaded
+
+        function updateTime() {
+            let currentTime = Date.now();
+            let elapsedTime = Math.floor((currentTime - startTime) / 1000); // Time in seconds
+            let minutes = Math.floor(elapsedTime / 60);
+            let seconds = elapsedTime % 60;
+            document.getElementById('timePassed').innerText = 
+                String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+        }
+
+        // Call updateTime every second
+        setInterval(updateTime, 1000);
+
+        // Variable for Average Speed (can be updated dynamically later)
+        // let averageSpeed = 0; // Initial speed
+
+        //function updateSpeed() {
+            //document.getElementById('avgSpeed').innerText = averageSpeed + 'm/s';
+        //}
+
+        // Example: After n seconds
+        //setInterval(updateSpeed(), 3000);
+
+// Crashes Variable and Graph
+let crashCount = 0; // Initial crash count
+    let crashData = {
+        labels: [], // Time (in seconds) for the X axis
+        datasets: [{
+            label: 'Number of Crashes',
+            data: [],
+            borderColor: 'rgba(255, 255, 255, 1)', // White border color for the line
+            backgroundColor: 'rgba(255, 255, 255, 0.2)', // White with transparency for the area fill
+            fill: true,
+            tension: 0.3
+        }]
+    };
+
+    let crashGraphConfig = {
+        type: 'line',
+        data: crashData,
+        options: {
+            scales: {
+                x: {
+                    title: {
+                        display: true,
+                        text: 'Time (seconds)',
+                        color: 'white' // White text for the x-axis title
+                    },
+                    ticks: {
+                        color: 'white' // White text for the x-axis labels
+                    }
+                },
+                y: {
+                    title: {
+                        display: true,
+                        text: 'Number of Crashes',
+                        color: 'white' // White text for the y-axis title
+                    },
+                    ticks: {
+                        color: 'white', // White text for the y-axis labels
+                        stepSize: 1, // Only show integer values
+                        beginAtZero: true
+                    },
+                    beginAtZero: true
+                }
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        color: 'white' // White text for the legend label
+                    }
+                }
+            }
+        }
+    };
+
+    let crashGraphCtx = document.getElementById('crashGraph').getContext('2d');
+    let crashChart = new Chart(crashGraphCtx, crashGraphConfig);
+
+    // Timer to keep track of elapsed time since page load
+    let starttime = Date.now();
+
+    function updateCrashes() {
+
+        let elapsedTimeInSeconds = Math.floor((Date.now() - starttime) / 1000);
+        crashChart.data.labels.push(elapsedTimeInSeconds);
+        crashChart.data.datasets[0].data.push(crashCount);
+        crashChart.update();
+    }
+
+
+
+    // Example: Increment crashes every 3 seconds
+    setInterval(updateCrashes, 3000);
+
+    // Speed and Container Variables
+let containerCount = 0; // Initial container count
+let averageSpeedGraph = 0; // Placeholder for the initial speed
+
+// Container Data and Graph
+let containerData = {
+    labels: [], // Time (in seconds) for the X axis
+    datasets: [{
+        label: 'Containers/s',
+        data: [],
+        borderColor: 'rgba(255, 255, 255, 1)', // White line
+        backgroundColor: 'rgba(255, 255, 255, 0.2)', // Transparent white fill
+        fill: true,
+        tension: 0.3
+    }]
+};
+
+let containerGraphConfig = {
+    type: 'line',
+    data: containerData,
+    options: {
+        scales: {
+            x: {
+                title: {
+                    display: true,
+                    text: 'Time (seconds)',
+                    color: 'white'
+                },
+                ticks: {
+                    color: 'white'
+                }
+            },
+            y: {
+                title: {
+                    display: true,
+                    text: 'Containers/s',
+                    color: 'white'
+                },
+                ticks: {
+                    color: 'white',
+                    stepSize: 1, // Only show integer values
+                    beginAtZero: true
+                },
+                beginAtZero: true
+            }
+        },
+        plugins: {
+            legend: {
+                labels: {
+                    color: 'white'
+                }
+            }
+        }
+    }
+};
+
+// Speed Data and Graph
+let speedData = {
+    labels: [],
+    datasets: [{
+        label: 'Average Speed (m/s)',
+        data: [],
+        borderColor: 'rgba(255, 255, 255, 1)', // White line
+        backgroundColor: 'rgba(255, 255, 255, 0.2)', // Transparent white fill
+        fill: true,
+        tension: 0.3
+    }]
+};
+
+let speedGraphConfig = {
+    type: 'line',
+    data: speedData,
+    options: {
+        scales: {
+            x: {
+                title: {
+                    display: true,
+                    text: 'Time (seconds)',
+                    color: 'white'
+                },
+                ticks: {
+                    color: 'white'
+                }
+            },
+            y: {
+                title: {
+                    display: true,
+                    text: 'Average Speed (m/s)',
+                    color: 'white'
+                },
+                ticks: {
+                    color: 'white',
+                    stepSize: 1, // Only show integer values
+                    beginAtZero: true
+                },
+                beginAtZero: true
+            }
+        },
+        plugins: {
+            legend: {
+                labels: {
+                    color: 'white'
+                }
+            }
+        }
+    }
+};
+
+let speedGraphCtx = document.getElementById('speedGraph').getContext('2d');
+let speedChart = new Chart(speedGraphCtx, speedGraphConfig);
+
+// Initialize the container chart
+let containerGraphCtx = document.getElementById('containerGraph').getContext('2d');
+let containerChart = new Chart(containerGraphCtx, containerGraphConfig);
+
+// Update Containers Graph
+function updateContainers() {
+    let elapsedTimeInSeconds = Math.floor((Date.now() - starttime) / 1000);
+
+    // Update the container graph labels and data
+    containerChart.data.labels.push(elapsedTimeInSeconds);
+    containerChart.data.datasets[0].data.push(containerCount);
+    containerChart.update();
+}
+
+// Update Speed Graph
+function updateSpeedGraph() {
+    let elapsedTimeInSeconds = Math.floor((Date.now() - starttime) / 1000);
+
+    // Update the speed graph labels and data (using random speed for now)
+    // averageSpeed = Math.random() * 10 + 10; // Placeholder: Replace with real speed data
+    speedChart.data.labels.push(elapsedTimeInSeconds);
+    speedChart.data.datasets[0].data.push(averageSpeed.toFixed(2));
+    document.getElementById('avgSpeed').innerText = averageSpeed.toFixed(2) + 'm/s';
+    speedChart.update();
+}
+
+// Example: Update containers and speed every 3 seconds
+setInterval(updateContainers, 3000);
+setInterval(updateSpeedGraph, 3000);
+
+    </script>
+</body>
+</html>
